@@ -52,7 +52,8 @@ def create_epub(
     title: str,
     author: str,
     language: str = "en",
-    chapter_pages: int = 1
+    chapter_pages: int = 1,
+    verbose: bool = False
 ) -> None:
     """
     Create an EPUB file from extracted PDF pages.
@@ -64,6 +65,7 @@ def create_epub(
         author: Book author
         language: Language code (default: "en")
         chapter_pages: Number of PDF pages per EPUB chapter (default: 1)
+        verbose: Enable progress tracking (default: False)
     """
     book = epub.EpubBook()
 
@@ -77,9 +79,15 @@ def create_epub(
     spine = ["nav"]
 
     # Group pages into chapters
+    total_chapters = (len(pages) + chapter_pages - 1) // chapter_pages
     for i in range(0, len(pages), chapter_pages):
         chapter_num = (i // chapter_pages) + 1
         chapter_pages_content = pages[i:i + chapter_pages]
+
+        if verbose:
+            page_range = f"{i + 1}-{min(i + chapter_pages, len(pages))}"
+            print(f"Processing chapter {chapter_num}/{total_chapters} (pages {page_range})...")
+            sys.stdout.flush()
 
         # Combine text from pages in this chapter
         chapter_text = "\n\n".join(
@@ -87,11 +95,19 @@ def create_epub(
             for p in chapter_pages_content if p['text']
         )
 
+        if verbose:
+            print(f"  Chapter text length: {len(chapter_text)} chars")
+            sys.stdout.flush()
+
         if not chapter_text.strip():
             continue
 
         # Convert plain text to HTML paragraphs
         html_content = text_to_html(chapter_text)
+
+        if verbose:
+            print(f"  HTML content length: {len(html_content)} chars")
+            sys.stdout.flush()
 
         # Create chapter
         chapter = epub.EpubHtml(
@@ -114,7 +130,7 @@ def create_epub(
     <h2>Chapter {chapter_num}</h2>
     {html_content}
 </body>
-</html>"""
+</html>""".encode('utf-8')
 
         book.add_item(chapter)
         chapters.append(chapter)
@@ -131,7 +147,17 @@ def create_epub(
     book.spine = spine
 
     # Write EPUB file
+    if verbose:
+        print(f"Writing EPUB to {output_path}...")
+        print(f"  Total chapters: {len(chapters)}")
+        print(f"  Spine items: {len(book.spine)}")
+        print(f"  TOC items: {len(book.toc)}")
+        print(f"  Book items: {len(list(book.get_items()))}")
+        sys.stdout.flush()
     epub.write_epub(output_path, book, {})
+    if verbose:
+        print("EPUB written successfully.")
+        sys.stdout.flush()
 
 
 def text_to_html(text: str) -> str:
@@ -288,10 +314,14 @@ Examples:
             title=title,
             author=args.author,
             language=args.language,
-            chapter_pages=args.chapter_pages
+            chapter_pages=args.chapter_pages,
+            verbose=args.verbose
         )
     except Exception as e:
+        import traceback
         print(f"Error creating EPUB: {e}", file=sys.stderr)
+        if args.verbose:
+            traceback.print_exc()
         sys.exit(1)
 
     print(f"Successfully created: {output_path}")
