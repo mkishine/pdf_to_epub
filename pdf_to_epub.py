@@ -23,24 +23,101 @@ except ImportError:
     sys.exit(1)
 
 
-def extract_text_from_pdf(pdf_path: str) -> list[dict]:
+def extract_paragraphs_from_page(
+    page,
+    indent_threshold: float = 45.0,
+    max_body_x0: float = 100.0
+) -> list[str]:
     """
-    Extract text content from each page of a PDF file.
+    Extract paragraphs from a PDF page using first-line indent detection.
+
+    Args:
+        page: pdfplumber page object
+        indent_threshold: x0 value above which a line is considered indented (paragraph start)
+        max_body_x0: maximum x0 for body text (filters out centered/right-aligned text)
+
+    Returns:
+        List of paragraph strings
+    """
+    words = page.extract_words()
+    if not words:
+        return []
+
+    # Group words into lines by their top position (with small tolerance)
+    lines_by_top = {}
+    for word in words:
+        # Round to 1 decimal to group words on the same line
+        top = round(word['top'], 1)
+        if top not in lines_by_top:
+            lines_by_top[top] = []
+        lines_by_top[top].append(word)
+
+    # Sort lines by vertical position
+    sorted_tops = sorted(lines_by_top.keys())
+
+    # Build lines with their x0 position
+    lines = []
+    for top in sorted_tops:
+        line_words = sorted(lines_by_top[top], key=lambda w: w['x0'])
+        x0 = line_words[0]['x0']
+        text = ' '.join(w['text'] for w in line_words)
+        lines.append({'x0': x0, 'text': text, 'top': top})
+
+    # Build paragraphs
+    paragraphs = []
+    current_para_lines = []
+
+    for line in lines:
+        x0 = line['x0']
+        text = line['text'].strip()
+
+        if not text:
+            continue
+
+        # Skip lines that are too far right (likely page numbers, headers, etc.)
+        if x0 > max_body_x0:
+            continue
+
+        # Check if this is a paragraph start (indented line)
+        is_para_start = x0 > indent_threshold
+
+        if is_para_start and current_para_lines:
+            # Save current paragraph and start new one
+            paragraphs.append(' '.join(current_para_lines))
+            current_para_lines = [text]
+        else:
+            # Continue current paragraph
+            current_para_lines.append(text)
+
+    # Don't forget the last paragraph
+    if current_para_lines:
+        paragraphs.append(' '.join(current_para_lines))
+
+    return paragraphs
+
+
+def extract_text_from_pdf(pdf_path: str, indent_threshold: float = 45.0) -> list[dict]:
+    """
+    Extract text content from each page of a PDF file, grouping text into paragraphs.
+
+    Uses first-line indent detection to identify paragraph boundaries.
 
     Args:
         pdf_path: Path to the PDF file
+        indent_threshold: x0 value above which a line is considered a paragraph start
 
     Returns:
-        List of dictionaries containing page number and text content
+        List of dictionaries containing page number and paragraphs
     """
     pages = []
 
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
+            paragraphs = extract_paragraphs_from_page(page, indent_threshold=indent_threshold)
             pages.append({
                 "page_number": i,
-                "text": text.strip()
+                "paragraphs": paragraphs,
+                "text": "\n\n".join(paragraphs)  # Keep text for backward compatibility
             })
 
     return pages
@@ -165,7 +242,7 @@ def text_to_html(text: str) -> str:
     Convert plain text to HTML paragraphs.
 
     Args:
-        text: Plain text content
+        text: Plain text content (paragraphs separated by double newlines)
 
     Returns:
         HTML formatted string with paragraphs
@@ -197,8 +274,6 @@ def text_to_html(text: str) -> str:
         if para:
             # Escape HTML entities and wrap in paragraph tags
             escaped = html.escape(para)
-            # Replace single newlines with line breaks
-            escaped = escaped.replace("\n", "<br/>\n")
             html_parts.append(f"<p>{escaped}</p>")
 
     return "\n".join(html_parts)
@@ -257,6 +332,13 @@ Examples:
         help="Enable verbose output"
     )
 
+    parser.add_argument(
+        "--indent-threshold",
+        type=float,
+        default=45.0,
+        help="X-position threshold for detecting paragraph indents (default: 45.0)"
+    )
+
     args = parser.parse_args()
 
     # Validate input file
@@ -284,6 +366,7 @@ Examples:
         print(f"Author: {args.author}")
         print(f"Language: {args.language}")
         print(f"Pages per chapter: {args.chapter_pages}")
+        print(f"Indent threshold: {args.indent_threshold}")
         print()
 
     # Extract text from PDF
@@ -291,7 +374,7 @@ Examples:
         print("Extracting text from PDF...")
 
     try:
-        pages = extract_text_from_pdf(str(input_path))
+        pages = extract_text_from_pdf(str(input_path), indent_threshold=args.indent_threshold)
     except Exception as e:
         print(f"Error reading PDF: {e}", file=sys.stderr)
         sys.exit(1)
